@@ -6,10 +6,12 @@ volatile word frame1 = 0b0000000000000000;  //dshot frame for esc1
 
 volatile unsigned int throttleSetting;
 
-volatile int bitCount = 16;  //count of bits iterated in dshot sender
+volatile word cmd0;  //command for esc0
+volatile word cmd1;  //command for esc1
+volatile bool telemetryCall0 = false;  //bool for calling telemetry on esc0
+volatile bool telemetryCall1 = false;  //bool for calling telemetry on esc1
+volatile int telemetrySelect = 2;  //var to store what telemetry we are asking for, 2 is off
 
-volatile bool telemetryCall0 = false;  //bool for calling telemetry
-volatile bool telemetryCall1 = false;  //bool for calling telemetry
 int test;
 
 IntervalTimer timer1;  //bit timer
@@ -24,13 +26,18 @@ void setup() {
   pinMode(ESC0_OUT, OUTPUT);
   pinMode(ESC1_OUT, OUTPUT);
   
-  timer2.begin(send_routine, 1000);  //periodic timer to call dshot every 0.1ms
-  timer3.begin(read_telemetry, 1000);
+  timer2.begin(send_routine, 1000);  //periodic timer to call dshot every 1ms
+  timer3.begin(read_telemetry, 2000);  //call read telemetry every 2ms
 
-  frame0 = generate_dshot_frame(0, false);  //test call 
-  frame1 = generate_dshot_frame(0, false);  //test call
-
+  //frame0 = generate_dshot_frame(0, false);  //test call 
+  //frame1 = generate_dshot_frame(0, false);  //test call
+  cmd0 = 0;
+  cmd1 = 0;
   delay(2000);
+
+  telemetrySelect = 0;
+  
+  //telemetryCall0 = true;  //start telemetry loop
 
   //frame0 = generate_dshot_frame(1, true);  //test call 
   //delay(270);
@@ -68,13 +75,26 @@ void loop() {
   //test = !test;  //flip test
   */
   
-  frame0 = generate_dshot_frame(200, true);  //test call
-  delay(1);
-  frame0 = generate_dshot_frame(200, false);  //test call
-  delay(49);
+  cmd0 = 0;
+  delay(1000);
+  cmd0 = 70;
+  delay(1000);
+  cmd0 = 80;
+  delay(1000);
+  cmd0 = 90;
+  delay(1000);
+  cmd0 = 49;
+  delay(1000);
 }
 
 void read_telemetry (bool esc) {
+  //Serial.println(telemetrySelect);
+  if(telemetrySelect == 0) {
+    telemetryCall0 = true;  //request telemetry 0
+  }
+  if (telemetrySelect == 1) {
+    telemetryCall1 = true;  //request telemetry 1
+  }
   if(Serial1.available() > 9) {  //if there is 10 bytes available in the buffer
     Serial.println("SERIAL PACKET:");
     char telemBuffer[10];  //create temp buffer
@@ -88,11 +108,18 @@ void read_telemetry (bool esc) {
     float volts = v / 100;
     float a = (telemBuffer[3] << 8) + telemBuffer[4];
     float amps = a / 100;
-    int rpm = (telemBuffer[7] << 8) + telemBuffer[8];
+    int rpm = (((telemBuffer[7] << 8) + telemBuffer[8]) * 100) / 12;
     
     Serial.print("VOLTS: "); Serial.println(volts);
     Serial.print("AMPS: "); Serial.println(amps);
     Serial.print("RPM: "); Serial.println(rpm);
+    
+    if(telemetrySelect == 0) {  //if 0, ask for 1 next
+      telemetrySelect = 1;  //change to 1 for next esc
+    }
+    if(telemetrySelect == 1) {  //if 1, ask for 0 next
+      telemetrySelect = 0;  //change to 0 for next esc
+    }
   }
   
 }
@@ -109,11 +136,9 @@ word generate_dshot_frame (word thr, bool telem) {  //generate dshot frames
   for (int i = 15; i > 4; i--) {  //loop through first 11 bits
     bitWrite(dshotFrame, i, (bitRead(thr, i - 5)));  //read each throttle bit and attach to frame 
   }
- 
+  
   if(telem == true) {  //if telemtry asked for
     bitSet(dshotFrame, 4); //set 00000000000*0000 bit to 1 for requesting telemetry
-    telemetryCall0 = false;  //stop calling for telemetry after asking for it
-    telemetryCall1 = false;  //stop calling for telemetry after asking for it
   }
   
   word crc = dshotFrame >> 4;  //initialize crc word matching frame so far, offset so it starts at LSB
@@ -126,13 +151,6 @@ word generate_dshot_frame (word thr, bool telem) {  //generate dshot frames
   for (int i = 3; i > -1; i--) {  //loop first 4 bits (LSB)
     bitWrite(dshotFrame, i, (bitRead(crc,i)));  //write crc to end of packet
   }
-  /*
-  Serial.print("FRAME: ");
-  for (int i = 15; i > -1; i--) {
-    Serial.print(bitRead(dshotFrame, i));
-  }
-  Serial.println("");
-  */
   
   return dshotFrame;  //return the frame with crc
 }
@@ -149,44 +167,45 @@ void endpulse1() {  //end pulse for esc1
 */
 
 void send_routine() {
-  digitalWriteFast(ESC0_OUT, HIGH);  //turn on output for esc0
-  digitalWriteFast(ESC1_OUT, HIGH);  //turn on output for esc1
-  bool x = bitRead(frame0, bitCount);  //read the bit of esc frame 0
-  bool y = bitRead(frame1, bitCount);  //read the bit of esc frame 1
-  //timer1.begin(send_routine, 1);  //start the next bit loop
-  if (x == 0 && y == 0) {
-    delayNanoseconds(545);  //short delay
-    digitalWriteFast(ESC0_OUT, LOW);  //turn off pulse 0
-    digitalWriteFast(ESC1_OUT, LOW); //turn off pulse 1
-    delayNanoseconds(1025);  //delay to finish
+  frame0 = generate_dshot_frame(cmd0, telemetryCall0);  //generate dshot frame 0
+  frame1 = generate_dshot_frame(cmd1, telemetryCall1);  //generate dshot frame 1
+  if (telemetryCall0 == true || telemetryCall1 == true) {  //if either telem is called, only send 1 then 0 it out
+    telemetryCall0 = false;  //set to false so it only sends 1
+    telemetryCall1 = false;  //set to false so it only sends 1
   }
-  else if (x == 1 && y == 0) {
-    delayNanoseconds(545);  //short delay
-    digitalWriteFast(ESC1_OUT, LOW); //turn off pulse 1
-    delayNanoseconds(525);  //short delay
-    digitalWriteFast(ESC0_OUT, LOW);  //turn off pulse 0
-    delayNanoseconds(500);  //delay to finish
-  }
-  else if (x == 0 && y == 1) {
-    delayNanoseconds(545);  //short delay
-    digitalWriteFast(ESC0_OUT, LOW); //turn off pulse 1
-    delayNanoseconds(525);  //short delay
-    digitalWriteFast(ESC1_OUT, LOW);  //turn off pulse 0
-    delayNanoseconds(500);  //delay to finish
-  }
-  else {
-    delayNanoseconds(1200);  //long delay
-    digitalWriteFast(ESC0_OUT, LOW); //turn off pulse 1
-    digitalWriteFast(ESC1_OUT, LOW);  //turn off pulse 0
-    delayNanoseconds(370);  //delay to finish
-  }
-  bitCount--;  //decrement bit count
-  if(bitCount > -1) {
+  noInterrupts();  //stop interrupts during transmission
+  for( int bitCount = 15; bitCount > -1; bitCount --) {
+    digitalWriteFast(ESC0_OUT, HIGH);  //turn on output for esc0
+    digitalWriteFast(ESC1_OUT, HIGH);  //turn on output for esc1
+    bool x = bitRead(frame0, bitCount);  //read the bit of esc frame 0
+    bool y = bitRead(frame1, bitCount);  //read the bit of esc frame 1
     //timer1.begin(send_routine, 1);  //start the next bit loop
-    send_routine();
+    if (x == 0 && y == 0) {
+      delayNanoseconds(545);  //short delay
+      digitalWriteFast(ESC0_OUT, LOW);  //turn off pulse 0
+      digitalWriteFast(ESC1_OUT, LOW); //turn off pulse 1
+      delayNanoseconds(1025);  //delay to finish
+    }
+    else if (x == 1 && y == 0) {
+      delayNanoseconds(545);  //short delay
+      digitalWriteFast(ESC1_OUT, LOW); //turn off pulse 1
+      delayNanoseconds(525);  //short delay
+      digitalWriteFast(ESC0_OUT, LOW);  //turn off pulse 0
+      delayNanoseconds(500);  //delay to finish
+    }
+    else if (x == 0 && y == 1) {
+      delayNanoseconds(545);  //short delay
+      digitalWriteFast(ESC0_OUT, LOW); //turn off pulse 1
+      delayNanoseconds(525);  //short delay
+      digitalWriteFast(ESC1_OUT, LOW);  //turn off pulse 0
+      delayNanoseconds(500);  //delay to finish
+    }
+    else {
+      delayNanoseconds(1200);  //long delay
+      digitalWriteFast(ESC0_OUT, LOW); //turn off pulse 1
+      digitalWriteFast(ESC1_OUT, LOW);  //turn off pulse 0
+      delayNanoseconds(370);  //delay to finish
+    }
   }
-  else {
-    bitCount = 15;  //reset bit counter
-    //timer1.end();  //stop the timer
-  }
+  interrupts();  //enable interrupts again
 }
