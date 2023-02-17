@@ -12,6 +12,18 @@ volatile bool telemetryCall0 = false;  //bool for calling telemetry on esc0
 volatile bool telemetryCall1 = false;  //bool for calling telemetry on esc1
 volatile int telemetrySelect = 2;  //var to store what telemetry we are asking for, 2 is off
 
+volatile word rpm0;  //rpm of esc0
+volatile word rpm1;  //rpm of esc1
+volatile float volts0;  //voltage on esc0
+volatile float volts1;  //voltage on esc1
+volatile float amps0;  //amp draw on esc0
+volatile float amps1;  //amp draw on esc1
+volatile int temp0;  //temperature of esc0
+volatile int temp1;  //temperature of esc1
+volatile int consump0;  //mAh consumed on esc0
+volatile int consump1;  //mAh consumed on esc1
+ 
+
 int test;
 
 IntervalTimer timer1;  //bit timer
@@ -27,7 +39,7 @@ void setup() {
   pinMode(ESC1_OUT, OUTPUT);
   
   timer2.begin(send_routine, 1000);  //periodic timer to call dshot every 1ms
-  timer3.begin(read_telemetry, 2000);  //call read telemetry every 2ms
+  timer3.begin(read_telemetry, 5000);  //call read telemetry every 2ms
 
   //frame0 = generate_dshot_frame(0, false);  //test call 
   //frame1 = generate_dshot_frame(0, false);  //test call
@@ -46,44 +58,27 @@ void setup() {
 }
 
 void loop() {
-  
-  /*
-  digitalWrite(LED_BUILTIN, HIGH);  //test rando stuff to occupy normal program space not in ISRs
-  delay(50);
-  digitalWrite(LED_BUILTIN, LOW);
-  delay(50);
-  frame0 = generate_dshot_frame(48, telemetryCall0);  //test call
-  delay(1000);
-  frame0 = generate_dshot_frame(100, telemetryCall0);  //test call
-  delay(1000);
-  for(int i = 100; i < 500; i++) {
-    frame0 = generate_dshot_frame(i, telemetryCall0);  //test call
-    delay(2);
-  }
-  delay(500);
-  for(int i = 500; i > 100; i--) {
-    frame0 = generate_dshot_frame(i, telemetryCall0);  //test call
-    delay(2);
-  }
-  delay(500);
-  frame0 = generate_dshot_frame(75, telemetryCall0);  //test call
-  delay(1000);
-  frame0 = generate_dshot_frame(48, telemetryCall0);  //test call
-  delay(1000);
-  //frame0 = frame0 = generate_dshot_frame(21, true);  //test call
-  delay(10);
-  //test = !test;  //flip test
-  */
-  
+
   cmd0 = 0;
+  cmd1 = 0;
   delay(1000);
-  cmd0 = 70;
+  cmd0 = 150;
+  cmd1 = 250;
+  delay(5000);
+  /*
+  for(int i = 150; i < 700; i++) {
+    cmd0 = i; cmd1 = (i / 2) + 75;
+    delay(2);
+  }
+  delay(500);
+  for(int i = 700; i > 150; i--) {
+    cmd0 = i; cmd1 = (i / 2) + 75;
+    delay(2);
+  }
+  */
   delay(1000);
-  cmd0 = 80;
-  delay(1000);
-  cmd0 = 90;
-  delay(1000);
-  cmd0 = 49;
+  cmd0 = 48;
+  cmd1 = 48;
   delay(1000);
 }
 
@@ -96,29 +91,65 @@ void read_telemetry (bool esc) {
     telemetryCall1 = true;  //request telemetry 1
   }
   if(Serial1.available() > 9) {  //if there is 10 bytes available in the buffer
-    Serial.println("SERIAL PACKET:");
+    Serial.print("ESC: "); Serial.println(telemetrySelect);
     char telemBuffer[10];  //create temp buffer
     for(int i = 0; i < 10; i++){
       telemBuffer[i] = Serial1.read(); //read each byte and store in array
-      Serial.print(i,DEC); Serial.print(":"); Serial.print(telemBuffer[i],DEC); Serial.print(" "); 
+      //Serial.print(i,DEC); Serial.print(":"); Serial.print(telemBuffer[i],DEC); Serial.print(" "); 
     }
-    Serial.println("");
 
-    float v = (telemBuffer[1] << 8) + telemBuffer[2];
-    float volts = v / 100;
-    float a = (telemBuffer[3] << 8) + telemBuffer[4];
-    float amps = a / 100;
-    int rpm = (((telemBuffer[7] << 8) + telemBuffer[8]) * 100) / 12;
+    while (Serial1.available()) Serial1.read();  //flush input buffer empty
     
-    Serial.print("VOLTS: "); Serial.println(volts);
-    Serial.print("AMPS: "); Serial.println(amps);
-    Serial.print("RPM: "); Serial.println(rpm);
-    
-    if(telemetrySelect == 0) {  //if 0, ask for 1 next
-      telemetrySelect = 1;  //change to 1 for next esc
+    uint8_t crc = get_crc8(telemBuffer, 9);  //get crc
+
+    if(crc != telemBuffer[9]) {  //if crc isnt equal
+      Serial.println("CORRUPT PACKET");
     }
-    if(telemetrySelect == 1) {  //if 1, ask for 0 next
-      telemetrySelect = 0;  //change to 0 for next esc
+    else {  //if it is
+      Serial.println("");
+
+      int temp = telemBuffer[0];  //assemble temperature data ( degrees C)
+      float v = (telemBuffer[1] << 8) + telemBuffer[2];  //assemble volt data
+      float volts = v / 100;  //make into accurate number
+      float a = (telemBuffer[3] << 8) + telemBuffer[4];  //assemble amp data
+      float amps = a / 100;  //make into accurate number
+      int consump = (telemBuffer[5] << 8) + telemBuffer[6];  //assemble amp data
+      int rpm = (((telemBuffer[7] << 8) + telemBuffer[8]) * 100) / 6;  //assemble rpm data, 12 pole
+
+      if(telemetryCall1 == 1) {  //if esc0 selected
+        temp0 = temp;  //set temperature of temp0
+        volts0 = volts;  //set voltage of volts0
+        amps0 = amps;    //set amps of amps0
+        consump0 = consump;  //set consumption of consump0
+        rpm0 = rpm;       //set rpm of rpm0
+
+        Serial.println("");  Serial.println("ESC0");
+        Serial.print("TEMP: "); Serial.print(temp0);  Serial.println(" C");
+        Serial.print("VOLTS: "); Serial.print(volts0); Serial.println(" V");
+        Serial.print("AMPS: "); Serial.print(amps0); Serial.println(" A");
+        Serial.print("CONSUMPTION: "); Serial.print(consump0); Serial.println(" mAh");
+        Serial.print("RPM: "); Serial.println(rpm0);
+      }
+      else {  //if esc1 selected
+        temp1 = temp;  //set temperature of temp1
+        volts1 = volts;  //set voltage of volts1
+        amps1 = amps;    //set amps of amps1
+        consump1 = consump;  //set consumption of consump1
+        rpm1 = rpm;       //set rpm of rpm1
+        
+        Serial.println("");  Serial.println("ESC1");
+        Serial.print("TEMP: "); Serial.print(temp1);  Serial.println(" C");
+        Serial.print("VOLTS: "); Serial.print(volts1); Serial.println(" V");
+        Serial.print("AMPS: "); Serial.print(amps1); Serial.println(" A");
+        Serial.print("CONSUMPTION: "); Serial.print(consump1); Serial.println(" mAh");
+        Serial.print("RPM: "); Serial.println(rpm1);
+      }
+      
+      
+    
+      
+      
+      telemetrySelect = !telemetrySelect;  //flip to other esc 
     }
   }
   
@@ -131,14 +162,14 @@ void test_telemetry() {
 }
 
 word generate_dshot_frame (word thr, bool telem) {  //generate dshot frames
-  word dshotFrame = 0;  //zero the frame to start
+  word dshotFrame = 0b0000000000000000;  //zero the frame to start
   thr = constrain(thr,0,2047);  //constrain throttle input to acceptable range
   for (int i = 15; i > 4; i--) {  //loop through first 11 bits
     bitWrite(dshotFrame, i, (bitRead(thr, i - 5)));  //read each throttle bit and attach to frame 
   }
   
   if(telem == true) {  //if telemtry asked for
-    bitSet(dshotFrame, 4); //set 00000000000*0000 bit to 1 for requesting telemetry
+    bitWrite(dshotFrame, 4, 1); //set 00000000000*0000 bit to 1 for requesting telemetry
   }
   
   word crc = dshotFrame >> 4;  //initialize crc word matching frame so far, offset so it starts at LSB
@@ -169,10 +200,13 @@ void endpulse1() {  //end pulse for esc1
 void send_routine() {
   frame0 = generate_dshot_frame(cmd0, telemetryCall0);  //generate dshot frame 0
   frame1 = generate_dshot_frame(cmd1, telemetryCall1);  //generate dshot frame 1
-  if (telemetryCall0 == true || telemetryCall1 == true) {  //if either telem is called, only send 1 then 0 it out
+  if (telemetryCall0 == true) {  //if either telem is called, only send 1 then 0 it out
     telemetryCall0 = false;  //set to false so it only sends 1
+  }
+  if (telemetryCall1 == true) {  //if either telem is called, only send 1 then 0 it out
     telemetryCall1 = false;  //set to false so it only sends 1
   }
+  
   noInterrupts();  //stop interrupts during transmission
   for( int bitCount = 15; bitCount > -1; bitCount --) {
     digitalWriteFast(ESC0_OUT, HIGH);  //turn on output for esc0
@@ -208,4 +242,17 @@ void send_routine() {
     }
   }
   interrupts();  //enable interrupts again
+}
+
+uint8_t update_crc8(uint8_t crc, uint8_t crc_seed){
+  uint8_t crc_u, i;
+  crc_u = crc;
+  crc_u ^= crc_seed;
+  for ( i=0; i<8; i++) crc_u = ( crc_u & 0x80 ) ? 0x7 ^ ( crc_u << 1 ) : ( crc_u << 1 );
+  return (crc_u);
+}
+uint8_t get_crc8(uint8_t *Buf, uint8_t BufLen){
+  uint8_t crc = 0, i;
+  for( i=0; i<BufLen; i++) crc = update_crc8(Buf[i], crc);
+  return (crc);
 }
